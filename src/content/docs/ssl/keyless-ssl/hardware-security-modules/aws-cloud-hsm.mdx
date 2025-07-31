@@ -3,11 +3,9 @@ pcx_content_type: tutorial
 title: AWS CloudHSM
 ---
 
-:::note[HSM Version Recommendation]
-
 This guide covers both AWS CloudHSM v1 (legacy) and v2 (current). **AWS CloudHSM v2 is recommended** for all new implementations as it provides better performance, security, and AWS support.
 
-:::
+---
 
 ## HSMv2 (Recommended)
 
@@ -21,6 +19,8 @@ Make sure you have:
 - **OpenSSL v3 or above** installed on your system
 - **Amazon Linux 2023** is recommended
 - A signed key pair to be uploaded (certificate and private key)
+
+---
 
 ### 1. Bootstrap HSM client setup
 
@@ -40,6 +40,8 @@ export CLOUDHSM_ROLE="crypto-user"
 export CLOUDHSM_PIN="<username>:<password>"
 ```
 
+---
+
 ### 2. Generate DER files and prepare keys
 
 Convert your certificate and private key to DER format:
@@ -54,6 +56,8 @@ openssl rsa -inform PEM -outform DER -in privkey.pem -out privkey.der
 # Extract public key from certificate in DER format
 openssl x509 -pubkey -noout -in certificate.pem | openssl rsa -pubin -outform DER -out pubkey.der
 ```
+
+---
 
 ### 3. Key generation and wrapping procedures
 
@@ -71,6 +75,8 @@ key list
 
 # Note the key handle for the wrapping key (e.g., 0x00000007)
 ```
+
+---
 
 ### 4. Import procedures with CKA_ID matching
 
@@ -93,6 +99,8 @@ It's critical that both the private and public keys have the same CKA_ID value. 
 
 :::
 
+---
+
 ### 5. Key unwrapping and verification
 
 Verify the imported keys are properly accessible:
@@ -108,6 +116,8 @@ key get-attribute-value --key 0x42 --attribute CKA_LABEL
 # Exit interactive session
 exit
 ```
+
+---
 
 ### 6. Configure Keyless SSL
 
@@ -136,6 +146,8 @@ sudo systemctl restart gokeyless.service
 sudo systemctl status gokeyless.service -l
 ```
 
+---
+
 ### 7. Cleanup procedures
 
 When you need to remove keys or clean up:
@@ -163,6 +175,8 @@ Be careful when deleting keys from the HSM. Once deleted, keys cannot be recover
 
 :::
 
+---
+
 ## HSMv1 (Legacy - Deprecated)
 
 :::caution[Deprecated]
@@ -183,6 +197,8 @@ Make sure you have:
 
 - Provisioned an [AWS CloudHSM cluster](https://docs.aws.amazon.com/cloudhsm/latest/userguide/getting-started.html)
 - Installed the [appropriate software library for PKCS#11](https://docs.aws.amazon.com/cloudhsm/latest/userguide/pkcs11-library-install.html)
+
+---
 
 ### 1. Import the public and private key to the HSM
 
@@ -225,6 +241,8 @@ Public Key Handle: 941
 Command: logoutHSM
 Command: exit
 ```
+
+---
 
 ### 2. Modify the gokeyless config file and restart the service
 
