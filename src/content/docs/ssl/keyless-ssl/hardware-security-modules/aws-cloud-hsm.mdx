@@ -1,38 +1,205 @@
 ---
 pcx_content_type: tutorial
-title: AWS cloud HSM
+title: AWS CloudHSM
 ---
 
-:::note[Note]
+:::note[HSM Version Recommendation]
+
+This guide covers both AWS CloudHSM v1 (legacy) and v2 (current). **AWS CloudHSM v2 is recommended** for all new implementations as it provides better performance, security, and AWS support.
+
+:::
+
+## HSMv2 (Recommended)
+
+AWS CloudHSM v2 uses the `cloudhsm-cli` tool for modern key management operations.
+
+### Before you start
+
+Make sure you have:
+
+- Provisioned an [AWS CloudHSM v2 cluster](https://docs.aws.amazon.com/cloudhsm/latest/userguide/getting-started.html)
+- **OpenSSL v3 or above** installed on your system
+- **Amazon Linux 2023** is recommended
+- A signed key pair to be uploaded (certificate and private key)
+
+### 1. Bootstrap HSM client setup
+
+Install and configure the CloudHSM v2 client:
+
+```bash
+wget https://s3.amazonaws.com/cloudhsmv2-software/CloudHsmClient/Amzn2023/cloudhsm-cli-latest.amzn2023.x86_64.rpm
+sudo yum install ./cloudhsm-cli-latest.amzn2023.x86_64.rpm
+sudo /opt/cloudhsm/bin/configure-cli -a <HSM IP>
+vi /opt/cloudhsm/etc/customerCA.crt # get the customerCA from the aws console
+
+# if you have only one hsm in your cluster you also need:
+sudo /opt/cloudhsm/bin/configure-cli --disable-key-availability-check
+
+# set env vars for the cli
+export CLOUDHSM_ROLE="crypto-user"
+export CLOUDHSM_PIN="<username>:<password>"
+```
+
+### 2. Generate DER files and prepare keys
+
+Convert your certificate and private key to DER format:
+
+```bash
+# Convert certificate to DER format
+openssl x509 -outform DER -in certificate.pem -out certificate.der
+
+# Convert private key to DER format
+openssl rsa -inform PEM -outform DER -in privkey.pem -out privkey.der
+
+# Extract public key from certificate in DER format
+openssl x509 -pubkey -noout -in certificate.pem | openssl rsa -pubin -outform DER -out pubkey.der
+```
+
+### 3. Key generation and wrapping procedures
+
+Generate a wrapping key and prepare for key import:
+
+```bash
+# Start cloudhsm-cli interactive session
+cloudhsm-cli interactive
+
+# Generate AES wrapping key
+key generate-aes --key-size-bytes 32 --label wrapping-key
+
+# List keys to get the key handle
+key list
+
+# Note the key handle for the wrapping key (e.g., 0x00000007)
+```
+
+### 4. Import procedures with CKA_ID matching
+
+Import your existing private key and certificate with matching CKA_ID values:
+
+```bash
+# Import the private key with CKA_ID 0x42
+key import-rsa-private-key --label mykey --id 0x42 --der-file privkey.der --wrap-key 0x00000007
+
+# Import the corresponding public key with matching CKA_ID 0x42
+key import-rsa-public-key --label mykey --id 0x42 --der-file pubkey.der
+
+# Verify both keys are imported with matching CKA_ID
+key list --label mykey
+```
+
+:::note[CKA_ID Matching]
+
+It's critical that both the private and public keys have the same CKA_ID value. In this example, we use `0x42` (hexadecimal 66), but you can use any unique identifier. The CKA_ID ensures proper key pair association within the HSM.
+
+:::
+
+### 5. Key unwrapping and verification
+
+Verify the imported keys are properly accessible:
+
+```bash
+# Test key operations to ensure proper import
+key list --id 0x42
+
+# Verify key attributes
+key get-attribute-value --key 0x42 --attribute CKA_ID
+key get-attribute-value --key 0x42 --attribute CKA_LABEL
+
+# Exit interactive session
+exit
+```
+
+### 6. Configure Keyless SSL
+
+Update the gokeyless configuration to use the HSMv2 PKCS#11 interface.
+
+Open `/etc/keyless/gokeyless.yaml` and add the HSMv2 configuration:
+
+```yaml
+private_key_stores:
+  - dir: /etc/keyless/keys
+  - uri: pkcs11:token=cavium;object=mykey;id=0x42?module-path=/opt/cloudhsm/lib/libcloudhsm_pkcs11.so&pin-value=<username>:<password>&max-sessions=1
+```
+
+:::caution[Configuration Notes]
+
+- Replace `<username>` and `<password>` with your actual crypto user credentials
+- The `id=0x42` must match the CKA_ID used during key import
+- The `max-sessions=1` parameter prevents session conflicts
+
+:::
+
+Restart the gokeyless service:
+
+```bash
+sudo systemctl restart gokeyless.service
+sudo systemctl status gokeyless.service -l
+```
+
+### 7. Cleanup procedures
+
+When you need to remove keys or clean up:
+
+```bash
+# Start interactive session
+cloudhsm-cli interactive
+
+# Delete specific keys by handle or ID
+key delete --key 0x42
+
+# Or delete by label (removes all keys with this label)
+key delete --label mykey
+
+# Delete the wrapping key if no longer needed
+key delete --label wrapping-key
+
+# Exit interactive session
+exit
+```
+
+:::caution[Cleanup Warning]
+
+Be careful when deleting keys from the HSM. Once deleted, keys cannot be recovered. Always verify you have proper backups before performing cleanup operations.
+
+:::
+
+## HSMv1 (Legacy - Deprecated)
+
+:::caution[Deprecated]
+
+The procedures below use AWS CloudHSM v1, which is deprecated. AWS recommends migrating to CloudHSM v2 for new implementations. HSMv1 uses the legacy `key_mgmt_util` tool and may not receive future updates.
+
+:::
+
+:::note
 
 This example imports an existing key pair, but you may prefer to [generate your key on the HSM](https://docs.aws.amazon.com/cloudhsm/latest/userguide/manage-keys.html).
 
 :::
 
----
-
-## Before you start
+### Before you start
 
 Make sure you have:
 
-- Provisioned an [AWS CloudHSM cluster](https://docs.aws.amazon.com/cloudhsm/latest/userguide/getting-started.html) .
-- Installed the [appropriate software library for PKCS#11](https://docs.aws.amazon.com/cloudhsm/latest/userguide/pkcs11-library-install.html).
+- Provisioned an [AWS CloudHSM cluster](https://docs.aws.amazon.com/cloudhsm/latest/userguide/getting-started.html)
+- Installed the [appropriate software library for PKCS#11](https://docs.aws.amazon.com/cloudhsm/latest/userguide/pkcs11-library-install.html)
 
----
+### 1. Import the public and private key to the HSM
 
-## 1. Import the public and private key to the HSM
+Before importing the public key, extract it from the certificate provided by your CA. Place the contents of your private key in `privkey.pem` and then run the following (replacing `certificate.pem` with your actual certificate) to populate `pubkey.pem`:
 
-Before importing the public key, extract it from the certificate provided by your CA. Place the contents of your private key in `privkey.pem` and then run the following (replacing certificate.pem with your actual certificate) to populate `pubkey.pm`.
-
-```txt
-keyserver$ openssl x509 -pubkey -noout -in certificate.pem > pubkey.pem
+```bash
+openssl x509 -pubkey -noout -in certificate.pem > pubkey.pem
 ```
 
-Log in to the CloudHSM using a previously created [crypto user](https://docs.aws.amazon.com/cloudhsm/latest/userguide/hsm-users.html#crypto-user) (CU) account and generate a key encryption key that will be used to import your private key.
+Log in to the CloudHSM using a previously created [crypto user](https://docs.aws.amazon.com/cloudhsm/latest/userguide/hsm-users.html#crypto-user) (CU) account and generate a key encryption key that will be used to import your private key:
+
+```bash
+/opt/cloudhsm/bin/key_mgmt_util
+```
 
 ```txt
-keyserver$ /opt/cloudhsm/bin/key_mgmt_util
-Command: loginHSM -u CU -s patrick -p donahue
+Command: loginHSM -u CU -s <username> -p <password>
 Command: genSymKey -t 31 -s 16 -sess -l import-wrapping-key
 ...
 Symmetric Key Created.  Key Handle: 658
@@ -48,24 +215,20 @@ Cfm3WrapHostKey returned: 0x00 : HSM Return: SUCCESS
 Cfm3CreateUnwrapTemplate returned: 0x00 : HSM Return: SUCCESS
 Cfm3UnWrapKey returned: 0x00 : HSM Return: SUCCESS
 ...
-Private Key Unwrapped.  Key Handle: 658
-
+Private Key Unwrapped.  Key Handle: 659
 
 Command: importPubKey -f pubkey.pem -l mykey -id 1
 Cfm3CreatePublicKey returned: 0x00 : HSM Return: SUCCESS
 ...
 Public Key Handle: 941
 
-
 Command: logoutHSM
 Command: exit
 ```
 
----
+### 2. Modify the gokeyless config file and restart the service
 
-## 2. Modify the gokeyless config file and restart the service
-
-Now that the keys are in place, we need to modify the configuration file that the key server will read on startup. Change the `object=mykey` and `pin-value=username:password` values to match the key label you provided and CU user you created.
+Now that the keys are in place, modify the configuration file that the key server will read on startup. Change the `object=mykey` and `pin-value=username:password` values to match the key label you provided and CU user you created.
 
 Open `/etc/keyless/gokeyless.yaml` and immediately after:
 
@@ -74,15 +237,20 @@ private_key_stores:
   - dir: /etc/keyless/keys
 ```
 
-add:
+Add:
 
 ```yaml
-- uri: pkcs11:token=cavium;object=mykey?module-path=/opt/cloudhsm/lib/libcloudhsm_pkcs11_standard.so&pin-value=patrick:donahue&max-sessions=1
+  - uri: pkcs11:token=cavium;object=mykey?module-path=/opt/cloudhsm/lib/libcloudhsm_pkcs11_standard.so&pin-value=<username>:<password>&max-sessions=1
 ```
 
-With the config file saved, restart `gokeyless` and verify it started successfully.
+:::note[HSMv1 Configuration]
 
-```sh
+Replace `<username>` and `<password>` with your actual crypto user credentials.
+
+:::
+
+With the config file saved, restart `gokeyless` and verify it started successfully:
+
+```bash
 sudo systemctl restart gokeyless.service
 sudo systemctl status gokeyless.service -l
-```
